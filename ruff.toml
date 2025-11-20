@@ -1,0 +1,54 @@
+line-length = 120
+indent-width = 4
+
+[format]
+quote-style = "double"
+docstring-code-format = false
+docstring-code-line-length = "dynamic"
+indent-style = "space"
+line-ending = "cr-lf"
+
+[lint.isort]
+lines-between-types = 0
+
+[lint]
+select = ["E", "F", "B", "D", "I", "PT", "NPY", "COM"]
+
+pydocstyle = { convention = "google" }
+
+ignore = [
+    "ANN401", # at the moment a lot of these annotations are necessary due to missing upstream typing support,
+    "C901",   # mccabe complexity
+    "D100",   # everything has to be documented (module, class, function)
+    "D104",   # module level docstring
+    "D105",   # undocumented-magic-method
+    "D203",   # No blank line before class docstring, because of inconsisency with ruff format
+    "D211",   # multi-line docstring summary not separated with an empty line
+    "D213",   # multi-line docstring summary should start at the second line
+    "D401",   # first word in impertative
+    "F821",   # disabled pending better integration for omni packages
+    "PLC1901",# compare-to-empty string
+    "PLR0913",# too-many-function-args
+    "PT003",  # pytest-extraneous-scope-function - on some functions we make this intentionally explicit for clarity purposess
+    "RET505", # superfluous-else-return
+    "RET506", # superfluous-else-raise
+    "RET507", # superfluous-else-continue
+    "TRY003", # raise-vanilla-args
+    "TRY300", # allow verbose logging in exception handlers
+]
+
+[lint.per-file-ignores]
+"tests/*" = [
+    "ANN201",  # missing-return-type-undocumented-public-function
+    "ANN202",  # missing-return-type-private-function
+    "D",       # Documentation issues 
+    "PLR2004", # magic-value-comparison
+    "PT018",   # Simplify assertion
+    "S101",    # allow assert statements in tests
+    "SIM223",  # both to support assert False and "Infotext" assertions for assert clarity
+    "SLF001",  # private-member-access
+]
+"setup.py" = ["ALL"]
+"conftest.py" = ["ALL"]
+"isaac_dirs/*" = ["ALL"]
+"manual_debugging/*" = ["ALL"]

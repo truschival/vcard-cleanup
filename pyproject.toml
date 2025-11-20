@@ -1,0 +1,99 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "vcard-cleaner"
+version = "2.0.0"
+description = "A comprehensive Python utility for cleaning, modernizing, and standardizing VCard (.vcf) files to the vCard 4.0 (RFC 6350) format"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [
+    { name = "VCard Cleaner Project" },
+]
+keywords = [
+    "vcard",
+    "vcf",
+    "contacts",
+    "cleanup",
+    "ios",
+    "rfc6350",
+    "utf8",
+    "iso8601",
+]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Communications",
+    "Topic :: Utilities",
+    "Topic :: Text Processing",
+]
+requires-python = ">=3.8"
+dependencies = [
+    # Core dependencies for full functionality
+    "pillow>=9.0.0",
+]
+
+[project.optional-dependencies]
+# Development dependencies
+dev = [
+    "ruff>=0.14.0",
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/your-username/vcard-cleaner"
+Repository = "https://github.com/your-username/vcard-cleaner.git"
+Issues = "https://github.com/your-username/vcard-cleaner/issues"
+
+[project.scripts]
+vcard-cleaner = "vcard_cleaner:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["vcard_cleaner.py"]
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+addopts = [
+    "--cov=vcard_cleaner",
+    "--cov-report=term-missing",
+    "--cov-report=html",
+    "--strict-markers",
+    "--strict-config",
+    "--disable-warnings",
+]
+testpaths = ["tests"]
+python_files = ["test_*.py", "*_test.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+
+[tool.coverage.run]
+source = ["vcard_cleaner"]
+omit = [
+    "*/tests/*",
+    "*/test_*",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "if self.debug:",
+    "if settings.DEBUG",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if 0:",
+    "if __name__ == .__main__.:",
+    "class .*\\bProtocol\\):",
+    "@(abc\\.)?abstractmethod",
+]
