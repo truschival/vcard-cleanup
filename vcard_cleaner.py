@@ -104,7 +104,9 @@ class VCardCleaner:
         # Apple-specific and non-standard extensions to remove or convert (case-insensitive)
         self.apple_extensions = {
             "X-ABLABEL",
-            "X-ABADR",  #'X-ADDRESSING-GRAMMAR', 'X-ABDATE',
+            "X-ABADR",
+            "X-ADDRESSING-GRAMMAR",
+            "X-ABDATE",
             "X-ABCROP-RECTANGLE",
             "X-ABSHOWAS",
             "X-ABUID",
@@ -112,6 +114,11 @@ class VCardCleaner:
             "X-PHONETIC-LAST-NAME",
             "X-PHONETIC-MIDDLE-NAME",
             "X-SOCIALPROFILE",
+            "X-IMAGEHASH",
+            "X-IMAGETYPE",
+            "X-SHARED-PHOTO-DISPLAY-PREF",
+            "X-UNKNOWN-ELEMENT",
+            "X-ABLABEL-ABLABEL",
         }
 
         # Make a case-insensitive version for lookups
@@ -201,9 +208,13 @@ class VCardCleaner:
             timestamp_match = re.search(r"REV:(.+)$", line, re.IGNORECASE)
             if timestamp_match:
                 timestamp = timestamp_match.group(1).strip()
+                
+                # Fix iOS bug where a 'T' replaces a '0' in the day (e.g. 2016-03-T8T...)
+                timestamp = re.sub(r"-T(\d)T", r"-0\1T", timestamp)
+                
                 # If it's already in ISO 8601 format, keep it
                 if re.match(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[Z\+\-]", timestamp):
-                    return line
+                    return f"REV:{timestamp}"
                 # Try to parse and convert to ISO 8601
                 try:
                     # Parse various common formats
@@ -212,6 +223,7 @@ class VCardCleaner:
                         "%Y-%m-%dT%H:%M:%SZ",
                         "%Y%m%dT%H%M%SZ",
                         "%Y-%m-%d %H:%M:%S",
+                        "%Y-%m-%dT%H:%M",
                         "%Y-%m-%d",
                     ]:
                         try:
@@ -219,12 +231,16 @@ class VCardCleaner:
                             clean_fmt = fmt.replace("Z", "").replace("+00:00", "")
                             dt = datetime.strptime(clean_timestamp, clean_fmt)
                             # Convert to UTC ISO 8601
-                            iso_timestamp = dt.replace(tzinfo=timezone.utc).isoformat().replace("+00:00", "Z")
+                            iso_timestamp = dt.replace(tzinfo=timezone.utc).strftime("%Y%m%dT%H%M%S%z")
                             return f"REV:{iso_timestamp}"
                         except ValueError:
                             continue
                 except Exception:
                     pass
+                
+                # Fallback: if we still couldn't parse it but it looks somewhat like a date
+                if "T" in timestamp:
+                    return f"REV:{timestamp}Z"
 
         # Handle BDAY (birthday) dates
         if line.upper().startswith("BDAY:"):
@@ -330,9 +346,8 @@ class VCardCleaner:
             if type_item.upper() in {t.upper() for t in redundant_types}:
                 continue
 
-            # Handle 'pref' specially - it's not a type but a preference parameter
+            # Handle 'pref' specially - it's not a type but a preference parameter in vCard 4.0
             if type_item.lower() == "pref":
-                normalized_types.append("pref")
                 continue
 
             # Special handling for MAIN on phone numbers
@@ -406,23 +421,29 @@ class VCardCleaner:
                 property_name=property_name,
             )
 
-            # If all types were redundant and removed, remove the entire TYPE parameter
-            if not normalized_type:
-                return ""
+            result = ""
+            if normalized_type:
+                result += f";TYPE={normalized_type}"
+            return result
 
-            return f";TYPE={normalized_type}"
+        if ":" in line:
+            prop_part, val_part = line.split(":", 1)
+        else:
+            prop_part, val_part = line, ""
 
         # Pattern to match ;type=value (handling various cases)
         type_pattern = re.compile(r";type=([^;:]+)", re.IGNORECASE)
-        normalized_line = type_pattern.sub(replace_type, line)
+        prop_part = type_pattern.sub(replace_type, prop_part)
 
         # Clean up any double semicolons that might result from removing TYPE parameters
-        normalized_line = re.sub(r";;+", ";", normalized_line)
+        prop_part = re.sub(r";;+", ";", prop_part)
 
         # Clean up semicolon before colon (if TYPE was at the end)
-        normalized_line = re.sub(r";:", ":", normalized_line)
+        prop_part = re.sub(r";$", "", prop_part)
 
-        return normalized_line
+        if ":" in line:
+            return f"{prop_part}:{val_part}"
+        return prop_part
 
     def remove_redundant_value_parameters(self, line):
         """Remove redundant VALUE parameters from VCard properties.
@@ -448,6 +469,13 @@ class VCardCleaner:
         if line.upper().startswith("PRODID;") and "VALUE=TEXT" in line.upper():
             return line
 
+        if ":" not in line:
+            return line
+            
+        parts = line.split(":", 1)
+        prop_part = parts[0]
+        val_part = parts[1]
+
         # List of redundant VALUE parameters to remove
         redundant_values = {
             "VALUE=UNKNOWN",
@@ -462,23 +490,23 @@ class VCardCleaner:
             # Match the VALUE parameter with optional comma or semicolon
             patterns = [
                 f";{redundant_value};",  # ;VALUE=XXX;
-                f";{redundant_value}:",  # ;VALUE=XXX:
+                f";{redundant_value}$",  # ;VALUE=XXX (at end)
                 f",{redundant_value};",  # ,VALUE=XXX;
-                f",{redundant_value}:",  # ,VALUE=XXX:
+                f",{redundant_value}$",  # ,VALUE=XXX (at end)
             ]
 
             for pattern in patterns:
                 # Replace with appropriate separator
                 if pattern.endswith(";"):
-                    line = re.sub(re.escape(pattern), ";", line, flags=re.IGNORECASE)
-                else:  # ends with ':'
-                    line = re.sub(re.escape(pattern), ":", line, flags=re.IGNORECASE)
+                    prop_part = re.sub(re.escape(pattern), ";", prop_part, flags=re.IGNORECASE)
+                else:  # ends with '$'
+                    pattern_str = pattern[:-1]
+                    prop_part = re.sub(re.escape(pattern_str) + r"$", "", prop_part, flags=re.IGNORECASE)
 
         # Clean up any double separators that might result
-        line = re.sub(r";;+", ";", line)
-        line = re.sub(r";:", ":", line)
+        prop_part = re.sub(r";;+", ";", prop_part)
 
-        return line
+        return f"{prop_part}:{val_part}"
 
     def clean_address_field(self, line):
         r"""Clean up address fields by removing literal \n sequences and normalizing formatting.
@@ -516,7 +544,93 @@ class VCardCleaner:
         # Clean up trailing spaces before semicolons
         cleaned_line = re.sub(r"\s+;", ";", cleaned_line)
 
-        return cleaned_line
+        # Additional normalization: ensure ADR has 7 semicolon-separated components
+        # (PO Box;Extended;Street;Locality;Region;Postal;Country)
+        try:
+            if ":" not in line:
+                return cleaned_line
+            prefix, value = cleaned_line.split(":", 1)
+
+            parts = value.split(";")
+
+            # If already 7 components and extended is empty, accept as-is
+            if len(parts) == 7 and parts[1] == "":
+                return cleaned_line
+
+            # Build from non-empty tokens: easier heuristics
+            non_empty = [p.strip() for p in parts if p.strip() != ""]
+
+            street = ""
+            locality = ""
+            region = ""
+            postal = ""
+            country = ""
+
+            if len(non_empty) >= 4:
+                country = non_empty[-1]
+                postal = non_empty[-2]
+                locality = non_empty[-3]
+                street = " ".join(non_empty[:-3])
+            elif len(non_empty) == 3:
+                street = non_empty[0]
+                locality = non_empty[1]
+                country = non_empty[2]
+            elif len(non_empty) == 2:
+                street = non_empty[0]
+                country = non_empty[1]
+            elif len(non_empty) == 1:
+                street = non_empty[0]
+
+            # Preserve PO box if it was explicitly provided as the very first component
+            po_box = ""
+            if parts and parts[0].strip() != "":
+                po_box = parts[0].strip()
+
+            # Heuristic: if street ends with a country name, pull it out
+            known_countries = {
+                "germany",
+                "deutschland",
+                "brazil",
+                "brasil",
+                "united states",
+                "usa",
+                "uk",
+                "austria",
+                "switzerland",
+                "france",
+                "spain",
+                "italy",
+            }
+            if street:
+                s_lower = street.lower()
+                for cname in known_countries:
+                    if s_lower.endswith(" " + cname):
+                        # remove trailing country
+                        country = street[-(len(cname) + 1) :].strip()
+                        street = street[: -(len(cname) + 1)].strip()
+                        break
+
+                # If street now ends with a likely locality (single capitalized token), split it off
+                parts_st = street.split()
+                if len(parts_st) >= 2:
+                    last_tok = parts_st[-1]
+                    if last_tok[0].isalpha() and last_tok[0].isupper() and not any(ch.isdigit() for ch in last_tok):
+                        locality = last_tok
+                        street = " ".join(parts_st[:-1])
+
+            new = [""] * 7
+            new[0] = po_box
+            new[1] = ""  # force Extended empty per user note
+            new[2] = street
+            new[3] = locality
+            new[4] = region
+            new[5] = postal
+            new[6] = country
+
+            fixed_value = ";".join(new)
+            return f"{prefix}:{fixed_value}"
+        except Exception:
+            return cleaned_line
 
     def remove_duplicate_photos(self, vcard_text):
         """Remove duplicate PHOTO properties, keeping only the first one.
@@ -604,8 +718,15 @@ class VCardCleaner:
             property_name = line.split(";")[0].split(":")[0].upper()
 
             if property_name == "UID":
-                # Replace existing UID with new one
-                processed_lines.append(f"UID:{new_uid}")
+                # Preserve existing UID but format as URN
+                if ":" in line:
+                    prop_part, val_part = line.split(":", 1)
+                    if not val_part.lower().startswith("urn:uuid:"):
+                        processed_lines.append(f"{prop_part}:urn:uuid:{val_part}")
+                    else:
+                        processed_lines.append(line)
+                else:
+                    processed_lines.append(f"UID:urn:uuid:{new_uid}")
                 has_uid = True
             elif property_name == "PRODID":
                 # Replace existing PRODID with our custom one
@@ -625,7 +746,7 @@ class VCardCleaner:
                         processed_lines.insert(insert_pos, "PRODID:-//VCard Cleaner v2.0//RFC 6350//EN")
                         insert_pos += 1
                     if not has_uid:
-                        processed_lines.insert(insert_pos, f"UID:{new_uid}")
+                        processed_lines.insert(insert_pos, f"UID:urn:uuid:{new_uid}")
                     break
 
         return "\n".join(processed_lines)
@@ -665,6 +786,10 @@ class VCardCleaner:
             # Replace Apple PRODID with a generic one
             return "PRODID:-//VCard Cleaner v2.0//RFC 6350//EN"
 
+        # Remove google.com/profiles/ URLs
+        if property_name == "URL" and "google.com/profiles/" in line:
+            return ""
+
         return line
 
     def ensure_rfc6350_compliance(self, vcard_text):
@@ -688,8 +813,18 @@ class VCardCleaner:
         has_version = False
         has_fn = False
         has_n = False
+        skip_continuations = False
 
         for line in lines:
+            if line.startswith(" ") or line.startswith("\t"):
+                if skip_continuations:
+                    continue
+                else:
+                    processed_lines.append(line)
+                    continue
+            else:
+                skip_continuations = False
+
             if not line.strip():
                 processed_lines.append(line)
                 continue
@@ -709,7 +844,18 @@ class VCardCleaner:
 
             # Process Apple extensions
             processed_line = self.process_apple_extensions(line)
-            if processed_line:  # Only add non-empty lines
+            
+            # Remove tel: prefix from TEL property values
+            if processed_line and property_name == "TEL":
+                if ":" in processed_line:
+                    prop_part, val_part = processed_line.split(":", 1)
+                    if val_part.lower().startswith("tel:"):
+                        val_part = val_part[4:]
+                    processed_line = f"{prop_part}:{val_part}"
+                        
+            if not processed_line:
+                skip_continuations = True
+            else:
                 processed_lines.append(processed_line)
 
         # Ensure required properties are present
@@ -741,24 +887,72 @@ class VCardCleaner:
                 # No N property, create a minimal FN
                 processed_lines.insert(-1, "FN:Contact")  # Insert before END:VCARD
 
+        # Find current FN value for honorifics and N-derivation
+        fn_val = None
+        for line in processed_lines:
+            if line.upper().startswith("FN:"):
+                fn_val = line.split(":", 1)[1]
+                break
+
+        # Derive N from FN if missing
+        if not has_n and fn_val:
+            name_parts = fn_val.strip().split()
+            if len(name_parts) >= 2:
+                # Heuristic: Last word is family name, others are given name
+                family = name_parts[-1]
+                given = " ".join(name_parts[:-1])
+                n_val = f"{family};{given};;;"
+            else:
+                # Single name: treat as given name
+                n_val = f";{fn_val.strip()};;;"
+
+            # Find insertion point: before END:VCARD
+            insert_idx = len(processed_lines)
+            for idx, pl in enumerate(processed_lines):
+                if pl.upper().strip() == "END:VCARD":
+                    insert_idx = idx
+                    break
+            processed_lines.insert(insert_idx, f"N:{n_val}")
+
+        # Ensure N property has correct number of semicolons and extract honorifics from FN
+
+        for i, line in enumerate(processed_lines):
+            if line.upper().startswith("N:"):
+                n_prefix, n_val = line.split(":", 1)
+                n_parts = n_val.split(";")
+                
+                # Ensure exactly 5 components (4 semicolons) for vCard 4.0 compliance
+                while len(n_parts) < 5:
+                    n_parts.append("")
+                
+                # If FN has an honorific prefix but N doesn't, copy it over
+                if fn_val and not n_parts[3].strip():
+                    prefixes = ["Dr.", "Prof.", "Mr.", "Mrs.", "Ms.", "Rev.", "Dr", "Prof", "Mr", "Mrs", "Ms", "Rev", "Sir", "Madam"]
+                    for p in prefixes:
+                        if fn_val.startswith(p + " ") or fn_val == p:
+                            n_parts[3] = p
+                            break
+                            
+                # If there are extra parts, merge them into the last part (suffix) to strictly adhere to 5 parts
+                if len(n_parts) > 5:
+                    n_parts[4] = ";".join(n_parts[4:])
+                    n_parts = n_parts[:5]
+                    
+                processed_lines[i] = f"{n_prefix}:{';'.join(n_parts)}"
+
         return "\n".join(processed_lines)
 
     def fix_preference_conflicts(self, vcard_text):
-        """Ensure only one 'pref' parameter exists per property type (EMAIL, TEL, ADR).
-
-        If multiple preferences exist, keep the first one and remove 'pref' from others.
-
+        """Remove 'pref' and 'PREF=...' parameters from all properties entirely.
+        
         Args:
             vcard_text: The VCard entry text
 
         Returns:
-            VCard text with preference conflicts resolved
+            VCard text with preferences removed
         """
         lines = vcard_text.split("\n")
         processed_lines = []
-
-        # Track which property types already have a preference
-        pref_found = {"EMAIL": False, "TEL": False, "ADR": False}
 
         for line in lines:
             if not line.strip():
@@ -766,24 +960,31 @@ class VCardCleaner:
                 continue
 
             # Check if this line has a preference
-            property_name = line.split(";")[0].split(":")[0].upper()
-
-            if property_name in pref_found and "pref" in line.lower():
-                if pref_found[property_name]:
-                    # Remove 'pref' from this line since we already have a preferred entry
-                    line = re.sub(r",pref|pref,|;pref|pref", "", line, flags=re.IGNORECASE)
-                    # Clean up any double commas or semicolons
-                    line = re.sub(r",,+", ",", line)
-                    line = re.sub(r";;+", ";", line)
-                    line = re.sub(r";,|,;", ";", line)
-                    # Clean up TYPE= with no value
-                    line = re.sub(r"TYPE=,", "TYPE=", line)
-                    line = re.sub(r"TYPE=;", "", line)
-                    line = re.sub(r"TYPE=:", ":", line)
+            if "pref" in line.lower():
+                if ":" in line:
+                    prop_part, val_part = line.split(":", 1)
                 else:
-                    # This is the first preference for this property type
-                    pref_found[property_name] = True
-
+                    prop_part, val_part = line, ""
+                    
+                # Remove any 'pref' or 'PREF=x' from this line
+                prop_part = re.sub(r";PREF=\d+|PREF=\d+;|,pref|pref,|;pref|pref", "", prop_part, flags=re.IGNORECASE)
+                # Clean up any double commas or semicolons
+                prop_part = re.sub(r",,+", ",", prop_part)
+                prop_part = re.sub(r";;+", ";", prop_part)
+                prop_part = re.sub(r";,|,;", ";", prop_part)
+                # Clean up TYPE= with no value
+                prop_part = re.sub(r"TYPE=,", "TYPE=", prop_part)
+                prop_part = re.sub(r"TYPE=;", "", prop_part)
+                prop_part = re.sub(r"TYPE=$", "", prop_part)
+                
+                # Clean up trailing semicolons
+                prop_part = re.sub(r"[,;]+$", "", prop_part)
+                
+                if ":" in line:
+                    line = f"{prop_part}:{val_part}"
+                else:
+                    line = prop_part
+                    
             processed_lines.append(line)
 
         return "\n".join(processed_lines)
@@ -887,7 +1088,7 @@ class VCardCleaner:
                 return line
             # If it's already in data URI format, just process the data
             if line.startswith("PHOTO:data:"):
-                return line
+                return line.replace("\\,", ",")
             property_part, photo_data = photo_match.groups()
             encoding = "base64"  # Default for vCard 4.0
             image_type = "JPEG"  # Default
@@ -895,6 +1096,7 @@ class VCardCleaner:
             property_part, encoding, image_type, photo_data = photo_match.groups()
 
         # Process the photo data
+        photo_data = photo_data.replace("\\,", ",")
         processed_data = self.process_photo_data(photo_data, encoding)
 
         # Convert to vCard 4.0 data URI format (no ENCODING parameter)
@@ -1003,6 +1205,8 @@ class VCardCleaner:
                 # Skip empty lines (removed Apple extensions)
                 if not processed_line:
                     i += 1
+                    while i < len(lines) and (lines[i].startswith(" ") or lines[i].startswith("\t")):
+                        i += 1
                     continue
 
             # Process photos if enabled and this is a PHOTO line
@@ -1107,6 +1311,8 @@ class VCardCleaner:
                 # Skip empty lines (removed Apple extensions)
                 if not line:
                     i += 1
+                    while i < len(lines) and (lines[i].startswith(" ") or lines[i].startswith("\t")):
+                        i += 1
                     continue
 
             # Process photos if this is a PHOTO line
